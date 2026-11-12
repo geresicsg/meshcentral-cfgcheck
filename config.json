@@ -1,9 +1,9 @@
 {
   "name": "Config Check",
   "shortName": "cfgcheck",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "geresicsg",
-  "description": "Windows eszkozok biztonsagi beallitasainak ellenorzese (ures jelszo: LimitBlankPasswordUse, OpenSSH PermitEmptyPasswords) es megjelenitese ablakban.",
+  "description": "Windows eszkozok biztonsagi beallitasainak ellenorzese",
   "hasAdminPanel": false,
   "homepage": "https://github.com/geresicsg/meshcentral-cfgcheck",
   "changelogUrl": "https://raw.githubusercontent.com/geresicsg/meshcentral-cfgcheck/main/changelog.md",
