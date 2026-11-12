@@ -2,7 +2,16 @@
   "name": "Config Check",
   "shortName": "cfgcheck",
   "version": "0.1.0",
-  "author": "saját",
-  "description": "Windows eszközök biztonsági beállításainak ellenőrzése (üres jelszó: LimitBlankPasswordUse, OpenSSH PermitEmptyPasswords) és megjelenítése ablakban.",
-  "hasAdminPanel": false
+  "author": "geresicsg",
+  "description": "Windows eszkozok biztonsagi beallitasainak ellenorzese (ures jelszo: LimitBlankPasswordUse, OpenSSH PermitEmptyPasswords) es megjelenitese ablakban.",
+  "hasAdminPanel": false,
+  "homepage": "https://github.com/geresicsg/meshcentral-cfgcheck",
+  "changelogUrl": "https://raw.githubusercontent.com/geresicsg/meshcentral-cfgcheck/main/changelog.md",
+  "configUrl": "https://raw.githubusercontent.com/geresicsg/meshcentral-cfgcheck/main/config.json",
+  "downloadUrl": "https://github.com/geresicsg/meshcentral-cfgcheck/archive/main.zip",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/geresicsg/meshcentral-cfgcheck.git"
+  },
+  "meshCentralCompat": ">=1.0.0"
 }
