@@ -58,6 +58,8 @@ module.exports.cfgcheck = function (parent) {
             '<div style="padding:8px">' +
             '<input type="button" id="cfgcheckBtn" value="Ellenőrzés futtatása" onclick="pluginHandler.cfgcheck.run()" />' +
             '<span id="cfgcheckStatus" style="margin-left:10px"></span>' +
+            '<label style="margin-left:15px"><input type="checkbox" id="cfgcheckPopup"' + ((getstore('_cfgcheckPopup', '0') == '1') ? ' checked' : '') +
+            ' onclick="putstore(\'_cfgcheckPopup\', this.checked ? \'1\' : \'0\')" /> Eredmény felugró ablakban is</label>' +
             '<div id="cfgcheckResult" style="margin-top:10px">' + last + '</div>' +
             '</div>');
     };
@@ -232,8 +234,10 @@ module.exports.cfgcheck = function (parent) {
         if (box && currentNode && currentNode._id === p.nodeid) box.innerHTML = html;
         if (st) st.textContent = (count === 0) ? 'Hiba' : ('Kész: ' + new Date().toLocaleTimeString());
 
-        // Felugró ablak (ha a felület támogatja)
-        try { setDialogMode(2, 'Config check: ' + h.esc(p.name), 1, null, html); } catch (ex) { }
+        // Felugró ablak, csak ha a fülön be van jelölve (alapból ki van kapcsolva)
+        if (getstore('_cfgcheckPopup', '0') == '1') {
+            try { setDialogMode(2, 'Config check: ' + h.esc(p.name), 1, null, html); } catch (ex) { }
+        }
     };
 
     return obj;
