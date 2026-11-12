@@ -1,0 +1,8 @@
+{
+  "name": "Config Check",
+  "shortName": "cfgcheck",
+  "version": "0.1.0",
+  "author": "saját",
+  "description": "Windows eszközök biztonsági beállításainak ellenőrzése (üres jelszó: LimitBlankPasswordUse, OpenSSH PermitEmptyPasswords) és megjelenítése ablakban.",
+  "hasAdminPanel": false
+}
