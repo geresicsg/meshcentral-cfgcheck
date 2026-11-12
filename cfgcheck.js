@@ -3,17 +3,22 @@
  *
  * Egy "Config check" fület ad az eszköz oldalához. A gombra kattintva a plugin
  * egy csak olvasó PowerShell scriptet futtat az ügynökön (a MeshCentral saját
- * "Run commands" funkciójával), majd az eredményt táblázatban kiírja a fülön
- * és egy felugró ablakban is.
+ * "Run commands" funkciójával), az eredményt pedig csoportokba rendezve, keretes
+ * táblázatokban kiírja a fülön.
  *
- * Jelenleg ellenőrzött beállítások:
- *   - HKLM\SYSTEM\CurrentControlSet\Control\Lsa\LimitBlankPasswordUse
- *   - OpenSSH sshd szolgáltatás állapota
- *   - PermitEmptyPasswords a sshd_config-ban és a sshd -T kimenetében
+ * Csoportok:
+ *   1) SFTP belépés üres jelszóval
+ *      - LimitBlankPasswordUse (registry)
+ *      - sshd szolgáltatás állapota
+ *      - PermitEmptyPasswords a sshd_config-ban és az sshd -T kimenetében
+ *   2) Távoli asztal (RDP)
+ *      - fDenyTSConnections, TermService, port, NLA, tűzfalszabály,
+ *        Remote Desktop Users csoport tagjai, LimitBlankPasswordUse
  *
- * Új ellenőrzés hozzáadása: két helyen kell bővíteni,
+ * Új ellenőrzés hozzáadása:
  *   1) buildScript(): adj hozzá egy sort, ami "CFGCHECK|kulcs|érték" formátumban ír ki,
- *   2) evaluate():    értelmezd a kulcsot és tegyél be egy sort a rows tömbbe.
+ *   2) evaluate():    értelmezd a kulcsot, és tedd be egy csoport rows tömbjébe.
+ *      A sor "ok" mezője: true = megfelelő (zöld), false = akadályozza (narancs), null = tájékoztató.
  *
  * FONTOS: az obj.exports-ban felsorolt függvényeket a MeshCentral szöveggé
  * alakítja és a böngészőben futtatja. Ezért ezek nem hivatkozhatnak a fájl
@@ -58,8 +63,6 @@ module.exports.cfgcheck = function (parent) {
             '<div style="padding:8px">' +
             '<input type="button" id="cfgcheckBtn" value="Ellenőrzés futtatása" onclick="pluginHandler.cfgcheck.run()" />' +
             '<span id="cfgcheckStatus" style="margin-left:10px"></span>' +
-            '<label style="margin-left:15px"><input type="checkbox" id="cfgcheckPopup"' + ((getstore('_cfgcheckPopup', '0') == '1') ? ' checked' : '') +
-            ' onclick="putstore(\'_cfgcheckPopup\', this.checked ? \'1\' : \'0\')" /> Eredmény felugró ablakban is</label>' +
             '<div id="cfgcheckResult" style="margin-top:10px">' + last + '</div>' +
             '</div>');
     };
@@ -73,98 +76,186 @@ module.exports.cfgcheck = function (parent) {
     obj.buildScript = function () {
         var L = [];
         L.push("$ErrorActionPreference = 'SilentlyContinue'");
-        // 1) LimitBlankPasswordUse
+        // Közös: LimitBlankPasswordUse
         L.push("$v = (Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' -Name LimitBlankPasswordUse).LimitBlankPasswordUse");
         L.push("Write-Output ('CFGCHECK|LimitBlankPasswordUse|' + $v)");
-        // 2) sshd szolgáltatás
+        // SFTP: sshd szolgáltatás
         L.push("$s = Get-Service sshd");
         L.push("if ($s) { Write-Output ('CFGCHECK|sshdService|' + $s.Status + '/' + $s.StartType) } else { Write-Output 'CFGCHECK|sshdService|NOTFOUND' }");
-        // 3) PermitEmptyPasswords a konfigurációs fájlban
+        // SFTP: PermitEmptyPasswords a konfigurációs fájlban
         L.push("$f = Join-Path $env:ProgramData 'ssh\\sshd_config'");
         L.push("if (Test-Path $f) { $m = @(Select-String -Path $f -Pattern '^\\s*PermitEmptyPasswords\\s+\\S+' | ForEach-Object { $_.Line.Trim() }); Write-Output ('CFGCHECK|sshdConfigLines|' + ($m -join ' ; ')) } else { Write-Output 'CFGCHECK|sshdConfigLines|NOFILE' }");
-        // 4) Effektív érték (sshd -T a fájlból számolja)
+        // SFTP: effektív érték (sshd -T a fájlból számolja)
         L.push("$e = @(& (Join-Path $env:windir 'System32\\OpenSSH\\sshd.exe') -T 2>$null | Where-Object { $_ -match '^permitemptypasswords' })");
         L.push("Write-Output ('CFGCHECK|sshdEffective|' + ($e -join ' ; '))");
+        // RDP: engedélyezés (0 = engedélyezve, 1 = tiltva)
+        L.push("$ts = Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections");
+        L.push("Write-Output ('CFGCHECK|rdpDeny|' + $ts.fDenyTSConnections)");
+        // RDP: NLA és port
+        L.push("$rp = Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp'");
+        L.push("Write-Output ('CFGCHECK|rdpNLA|' + $rp.UserAuthentication)");
+        L.push("Write-Output ('CFGCHECK|rdpPort|' + $rp.PortNumber)");
+        // RDP: szolgáltatás
+        L.push("$t = Get-Service TermService");
+        L.push("if ($t) { Write-Output ('CFGCHECK|rdpService|' + $t.Status + '/' + $t.StartType) } else { Write-Output 'CFGCHECK|rdpService|NOTFOUND' }");
+        // RDP: tűzfalszabály (a szabály neve nyelvfüggetlen)
+        L.push("$fw = @(Get-NetFirewallRule -Name 'RemoteDesktop-UserMode-In-TCP' | ForEach-Object { [string]$_.Enabled + '/' + [string]$_.Profile })");
+        L.push("Write-Output ('CFGCHECK|rdpFirewall|' + ($fw -join ' ; '))");
+        // RDP: a Remote Desktop Users csoport tagjai (SID alapján, nyelvfüggetlen)
+        L.push("$rg = @(Get-LocalGroupMember -SID 'S-1-5-32-555' | ForEach-Object { $_.Name })");
+        L.push("Write-Output ('CFGCHECK|rdpUsers|' + ($rg -join ' ; '))");
         return L.join('\r\n');
     };
 
-    // A nyers értékekből sorokat készít. allows: true = az üres jelszót engedi, false = nem engedi, null = nem releváns
+    // A nyers értékekből csoportokat és sorokat készít.
+    // ok: true = megfelelő (zöld), false = akadályozza (narancs), null = tájékoztató
     obj.evaluate = function (v) {
-        var rows = [], reasons = [];
+        var t = function (x) { return (x == null) ? '' : String(x).trim(); };
         var first = function (s) { return String(s || '').split(' ; ')[0].trim(); };
+        var svcText = function (s) { return (s === 'NOTFOUND') ? 'nincs telepítve' : (s.replace(/\/$/, '') || 'ismeretlen'); };
 
-        // LimitBlankPasswordUse
-        var lb = (v.LimitBlankPasswordUse == null) ? '' : String(v.LimitBlankPasswordUse).trim();
-        var lbAllows = (lb === '0');
-        rows.push({
-            title: 'Üres jelszó csak konzolon (LimitBlankPasswordUse)',
-            value: (lb === '') ? 'nincs beállítva (alapértelmezett: 1)' : (lb + (lb === '0' ? ' (Letiltva)' : ' (Engedélyezve)')),
-            allows: lbAllows,
-            note: lbAllows ? 'Az üres jelszó hálózaton keresztül is használható.' : 'Üres jelszóval csak a gép konzolján lehet belépni.'
-        });
-        if (!lbAllows) reasons.push('a LimitBlankPasswordUse nem 0');
+        // ---- Közös: LimitBlankPasswordUse ----
+        var lb = t(v.LimitBlankPasswordUse);
+        var lbOk = (lb === '0');
+        var lbRow = function (extra) {
+            return {
+                title: 'Üres jelszó csak konzolon (LimitBlankPasswordUse)',
+                value: (lb === '') ? 'nincs beállítva (alapértelmezett: 1)' : (lb + (lb === '0' ? ' (Letiltva)' : ' (Engedélyezve)')),
+                ok: lbOk,
+                note: (lbOk ? 'Az üres jelszó hálózaton keresztül is használható.' : 'Üres jelszóval csak a gép konzolján lehet belépni.') + (extra || '')
+            };
+        };
 
-        // sshd szolgáltatás
-        var svc = String(v.sshdService || '').trim();
+        // ---- 1) SFTP ----
+        var sftp = [], sftpWhy = [];
+        sftp.push(lbRow(''));
+        if (!lbOk) sftpWhy.push('a LimitBlankPasswordUse nem 0');
+
+        var svc = t(v.sshdService);
         var svcRunning = (svc.indexOf('Running') === 0);
-        rows.push({
-            title: 'OpenSSH szerver (sshd szolgáltatás)',
-            value: (svc === 'NOTFOUND') ? 'nincs telepítve' : (svc || 'ismeretlen'),
-            allows: null,
-            note: svcRunning ? '' : 'Az sshd nem fut.'
-        });
-        if (!svcRunning) reasons.push('az sshd nem fut');
+        sftp.push({ title: 'OpenSSH szerver (sshd szolgáltatás)', value: svcText(svc), ok: svcRunning, note: svcRunning ? '' : 'Az sshd nem fut.' });
+        if (!svcRunning) sftpWhy.push('az sshd nem fut');
 
-        // PermitEmptyPasswords a fájlban
-        var cfg = String(v.sshdConfigLines || '').trim();
+        var cfg = t(v.sshdConfigLines);
         var cfgVal = (cfg === '' || cfg === 'NOFILE') ? null : (first(cfg).split(/\s+/)[1] || '').toLowerCase();
-        rows.push({
+        sftp.push({
             title: 'PermitEmptyPasswords (sshd_config)',
             value: (cfg === 'NOFILE') ? 'a fájl nem található' : ((cfg === '') ? 'nincs ilyen sor (alapértelmezett: no)' : cfg),
-            allows: (cfgVal === 'yes'),
+            ok: (cfgVal === 'yes'),
             note: 'Az első előfordulás számít. A Match blokkokon belüli sorokat külön kell nézni.'
         });
 
-        // Effektív érték
-        var eff = String(v.sshdEffective || '').trim();
+        var eff = t(v.sshdEffective);
         var effVal = (eff === '') ? null : (first(eff).split(/\s+/)[1] || '').toLowerCase();
-        rows.push({
+        sftp.push({
             title: 'PermitEmptyPasswords (effektív, sshd -T)',
             value: (eff === '') ? 'nem olvasható' : first(eff),
-            allows: (effVal == null) ? null : (effVal === 'yes'),
+            ok: (effVal == null) ? null : (effVal === 'yes'),
             note: 'A fájlból számolt érték, az sshd újraindítása után lesz érvényes.'
         });
         var permit = (effVal != null) ? (effVal === 'yes') : (cfgVal === 'yes');
-        if (!permit) reasons.push('a PermitEmptyPasswords nem yes');
+        if (!permit) sftpWhy.push('a PermitEmptyPasswords nem yes');
 
-        // Összegzés, legfelül
-        var works = lbAllows && permit && svcRunning;
-        rows.unshift({
+        var sftpWorks = lbOk && permit && svcRunning;
+        sftp.unshift({
             title: 'SFTP belépés üres jelszóval',
-            value: works ? 'lehetséges' : 'nem lehetséges',
-            allows: works,
+            value: sftpWorks ? 'lehetséges' : 'nem lehetséges',
+            ok: sftpWorks,
             summary: true,
-            note: works ? '' : ('Ok: ' + reasons.join(', ') + '.')
+            note: sftpWorks ? '' : ('Ok: ' + sftpWhy.join(', ') + '.')
         });
-        return rows;
+
+        // ---- 2) Távoli asztal (RDP) ----
+        var rdp = [], rdpWhy = [];
+
+        var deny = t(v.rdpDeny);
+        var rdpEnabled = (deny === '0');
+        rdp.push({
+            title: 'Távoli asztal engedélyezve (fDenyTSConnections)',
+            value: (deny === '') ? 'nem olvasható' : (deny + (deny === '0' ? ' (Engedélyezve)' : ' (Tiltva)')),
+            ok: (deny === '') ? null : rdpEnabled,
+            note: 'Ennek 0-nak kell lennie.'
+        });
+        if (!rdpEnabled) rdpWhy.push('a Távoli asztal nincs engedélyezve');
+
+        var ts = t(v.rdpService);
+        var tsRunning = (ts.indexOf('Running') === 0);
+        rdp.push({ title: 'Távoli asztal szolgáltatás (TermService)', value: svcText(ts), ok: tsRunning, note: tsRunning ? '' : 'A szolgáltatás nem fut.' });
+        if (!tsRunning) rdpWhy.push('a TermService nem fut');
+
+        var port = t(v.rdpPort);
+        rdp.push({
+            title: 'Port (PortNumber)',
+            value: (port === '') ? 'nem olvasható' : port,
+            ok: null,
+            note: 'Alapértelmezett: 3389. A kliensben ezt a portot kell megadni.'
+        });
+
+        var nla = t(v.rdpNLA);
+        rdp.push({
+            title: 'Hálózati szintű hitelesítés, NLA (UserAuthentication)',
+            value: (nla === '') ? 'nem olvasható' : (nla + (nla === '1' ? ' (Szükséges)' : ' (Nem szükséges)')),
+            ok: null,
+            note: 'Tájékoztató. Üres jelszavú fióknál, ha a belépés elbukik, ezt is érdemes megnézni.'
+        });
+
+        var fw = t(v.rdpFirewall);
+        rdp.push({
+            title: 'Tűzfalszabály (RemoteDesktop-UserMode-In-TCP)',
+            value: (fw === '') ? 'nem olvasható' : (first(fw).indexOf('True') === 0 ? 'Engedélyezve (' + first(fw).split('/')[1] + ')' : 'Letiltva'),
+            ok: (fw === '') ? null : (first(fw).indexOf('True') === 0),
+            note: 'Csak akkor számít, ha nem a gépen belülről (localhost, pl. MeshCentral Router) csatlakozol.'
+        });
+
+        var users = t(v.rdpUsers);
+        rdp.push({
+            title: 'Remote Desktop Users csoport tagjai',
+            value: (users === '') ? '(üres)' : users.split(' ; ').join(', '),
+            ok: null,
+            note: 'Az Administrators csoport tagjai alapból beléphetnek.'
+        });
+
+        rdp.push(lbRow(' Csak üres jelszavú fióknál számít.'));
+
+        var rdpWorks = rdpEnabled && tsRunning;
+        rdp.unshift({
+            title: 'Távoli asztal (RDP) elérhető',
+            value: rdpWorks ? 'igen' : 'nem',
+            ok: rdpWorks,
+            summary: true,
+            note: rdpWorks ? '' : ('Ok: ' + rdpWhy.join(', ') + '.')
+        });
+
+        return [
+            { title: 'SFTP belépés', rows: sftp },
+            { title: 'Távoli asztal (RDP)', rows: rdp }
+        ];
     };
 
-    obj.render = function (rows, name) {
+    // Csoportonként egy keret, benne egy táblázat
+    obj.render = function (sections, name) {
         var e = pluginHandler.cfgcheck.esc;
+        var GREEN = '#2a8a2a', ORANGE = '#c77700';
         var td = 'padding:4px 10px;border:1px solid #8886;';
-        var out = '<div style="margin-bottom:6px"><b>' + e(name) + '</b> &ndash; ' + e(new Date().toLocaleString()) + '</div>';
-        out += '<table style="border-collapse:collapse">';
-        for (var i = 0; i < rows.length; i++) {
-            var r = rows[i];
-            var col = (r.allows === true) ? '#c77700' : ((r.allows === false) ? '#2a8a2a' : 'inherit');
-            var mark = (r.allows === null || r.allows === undefined) ? '' : '&#9679; ';
-            out += '<tr' + (r.summary ? ' style="font-weight:bold"' : '') + '>' +
-                '<td style="' + td + '">' + e(r.title) + '</td>' +
-                '<td style="' + td + 'color:' + col + '">' + mark + e(r.value) + '</td>' +
-                '<td style="' + td + 'opacity:.75;font-weight:normal">' + e(r.note || '') + '</td></tr>';
+        var out = '<div style="margin-bottom:8px"><b>' + e(name) + '</b> &ndash; ' + e(new Date().toLocaleString()) + '</div>';
+        for (var s = 0; s < sections.length; s++) {
+            var sec = sections[s];
+            out += '<fieldset style="border:1px solid #888a;border-radius:6px;padding:8px 12px 10px 12px;margin:0 0 14px 0">' +
+                '<legend style="padding:0 6px;font-weight:bold">' + e(sec.title) + '</legend>' +
+                '<table style="border-collapse:collapse">';
+            for (var i = 0; i < sec.rows.length; i++) {
+                var r = sec.rows[i];
+                var col = (r.ok === true) ? GREEN : ((r.ok === false) ? ORANGE : 'inherit');
+                var mark = (r.ok === null || r.ok === undefined) ? '' : '&#9679; ';
+                out += '<tr' + (r.summary ? ' style="font-weight:bold"' : '') + '>' +
+                    '<td style="' + td + '">' + e(r.title) + '</td>' +
+                    '<td style="' + td + 'color:' + col + '">' + mark + e(r.value) + '</td>' +
+                    '<td style="' + td + 'opacity:.75;font-weight:normal">' + e(r.note || '') + '</td></tr>';
+            }
+            out += '</table></fieldset>';
         }
-        out += '</table>';
-        out += '<div style="margin-top:6px;opacity:.7;font-size:90%"><span style="color:#c77700">&#9679;</span> az üres jelszót engedi &nbsp; <span style="color:#2a8a2a">&#9679;</span> nem engedi</div>';
+        out += '<div style="opacity:.7;font-size:90%"><span style="color:' + GREEN + '">&#9679;</span> megfelelő / használható &nbsp; ' +
+            '<span style="color:' + ORANGE + '">&#9679;</span> akadályozza &nbsp; (jelölés nélkül: tájékoztató)</div>';
         return out;
     };
 
@@ -233,11 +324,6 @@ module.exports.cfgcheck = function (parent) {
         h.last[p.nodeid] = html;
         if (box && currentNode && currentNode._id === p.nodeid) box.innerHTML = html;
         if (st) st.textContent = (count === 0) ? 'Hiba' : ('Kész: ' + new Date().toLocaleTimeString());
-
-        // Felugró ablak, csak ha a fülön be van jelölve (alapból ki van kapcsolva)
-        if (getstore('_cfgcheckPopup', '0') == '1') {
-            try { setDialogMode(2, 'Config check: ' + h.esc(p.name), 1, null, html); } catch (ex) { }
-        }
     };
 
     return obj;

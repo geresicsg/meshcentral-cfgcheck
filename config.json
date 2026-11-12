@@ -1,9 +1,9 @@
 {
   "name": "Config Check",
   "shortName": "cfgcheck",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "author": "geresicsg",
-  "description": "Windows eszkozok biztonsagi beallitasainak ellenorzese",
+  "description": "Windows beallitasainak ellenorzese",
   "hasAdminPanel": false,
   "homepage": "https://github.com/geresicsg/meshcentral-cfgcheck",
   "changelogUrl": "https://raw.githubusercontent.com/geresicsg/meshcentral-cfgcheck/main/changelog.md",
